@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>数据质量评分校准台</title>
+<style>
+  :root {
+    --bg: #f5f7fa; --panel: #ffffff; --ink: #1f2937; --muted: #6b7280;
+    --line: #e5e7eb; --brand: #1d4ed8; --brand-soft: #dbeafe;
+    --ok: #047857; --ok-soft: #d1fae5; --warn: #b45309; --warn-soft: #fef3c7;
+    --bad: #b91c1c; --bad-soft: #fee2e2; --neutral: #4b5563; --neutral-soft: #e5e7eb;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+         background: var(--bg); color: var(--ink); font-size: 14px; }
+  header { background: var(--panel); border-bottom: 1px solid var(--line); padding: 14px 24px;
+           display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+  header h1 { font-size: 17px; margin: 0; }
+  .badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .badge.active { background: var(--brand-soft); color: var(--brand); }
+  .badge.draft { background: var(--neutral-soft); color: var(--neutral); }
+  .badge.archived { background: #f3e8ff; color: #7e22ce; }
+  .state-scored { background: var(--ok-soft); color: var(--ok); }
+  .state-empty, .state-insufficient_samples { background: var(--warn-soft); color: var(--warn); }
+  .state-rule_conflict { background: var(--bad-soft); color: var(--bad); }
+  .gate-true { background: var(--ok-soft); color: var(--ok); }
+  .gate-false { background: var(--bad-soft); color: var(--bad); }
+  .sev-critical { background: var(--bad-soft); color: var(--bad); }
+  .sev-warning { background: var(--warn-soft); color: var(--warn); }
+  .sev-info { background: var(--brand-soft); color: var(--brand); }
+  nav { display: flex; gap: 4px; padding: 0 24px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  nav button { background: none; border: none; padding: 12px 16px; font-size: 14px; cursor: pointer;
+               color: var(--muted); border-bottom: 2px solid transparent; }
+  nav button.on { color: var(--brand); border-bottom-color: var(--brand); font-weight: 600; }
+  main { padding: 22px 24px; max-width: 1280px; margin: 0 auto; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px; margin-bottom: 18px; }
+  .panel h2 { margin: 0 0 12px; font-size: 15px; }
+  .panel h3 { margin: 16px 0 8px; font-size: 13.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; background: #fafbfc; }
+  tr.clickable { cursor: pointer; }
+  tr.clickable:hover { background: #f8fafc; }
+  code, .mono { font-family: var(--mono); font-size: 12px; }
+  .checksum { font-family: var(--mono); font-size: 11.5px; color: var(--muted); word-break: break-all; }
+  .score-num { font-weight: 700; font-variant-numeric: tabular-nums; }
+  .score-none { color: var(--warn); font-weight: 600; }
+  .muted { color: var(--muted); }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+  button.btn { background: var(--brand); color: #fff; border: none; border-radius: 7px; padding: 8px 14px;
+               font-size: 13px; cursor: pointer; }
+  button.btn.secondary { background: #fff; color: var(--ink); border: 1px solid var(--line); }
+  button.btn.danger { background: #fff; color: var(--bad); border: 1px solid #fecaca; }
+  button.btn:disabled { opacity: .45; cursor: not-allowed; }
+  input, select, textarea { border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px; font-size: 13px;
+                            font-family: inherit; background: #fff; color: var(--ink); }
+  textarea { width: 100%; font-family: var(--mono); font-size: 12px; min-height: 150px; }
+  label { font-size: 12.5px; color: var(--muted); display: block; margin-bottom: 4px; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+  .pill { font-size: 11.5px; padding: 1px 7px; border-radius: 999px; background: var(--neutral-soft); color: var(--neutral); }
+  .pill.exempt { background: #fef3c7; color: #92400e; }
+  .pill.fail { background: var(--bad-soft); color: var(--bad); }
+  .pill.pass { background: var(--ok-soft); color: var(--ok); }
+  .reason { background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 10px 12px; font-size: 13px; }
+  .toast { position: fixed; right: 24px; bottom: 24px; max-width: 420px; border-radius: 10px; padding: 12px 16px;
+           box-shadow: 0 8px 28px rgba(0,0,0,.18); color: #fff; font-size: 13px; display: none; z-index: 50; }
+  .toast.ok { background: var(--ok); } .toast.err { background: var(--bad); }
+  .diff-add { color: var(--ok); font-weight: 600; } .diff-del { color: var(--bad); font-weight: 600; }
+  .diff-chg { background: var(--warn-soft); }
+  .backlink { cursor: pointer; color: var(--brand); background: none; border: none; font-size: 13px; padding: 0; }
+  .kv { display: grid; grid-template-columns: 150px 1fr; gap: 6px 14px; font-size: 13px; }
+  .kv .k { color: var(--muted); }
+  pre.ev { background: #f8fafc; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px;
+           margin: 0; font-family: var(--mono); font-size: 11.5px; white-space: pre-wrap; word-break: break-word; }
+</style>
+</head>
+<body>
+<header>
+  <h1>数据质量评分校准台</h1>
+  <span id="activeBadge" class="badge draft">未激活版本</span>
+  <span class="muted" id="activeChecksum"></span>
+  <span style="flex:1"></span>
+  <button class="btn secondary" id="seedBtn">载入演示数据</button>
+</header>
+<nav>
+  <button data-tab="runs" class="on">运行记录</button>
+  <button data-tab="submit">提交批次</button>
+  <button data-tab="versions">校准版本</button>
+  <button data-tab="gates">发布门禁</button>
+  <button data-tab="alerts">告警</button>
+</nav>
+<main>
+  <!-- ============================== RUNS ============================== -->
+  <section id="tab-runs">
+    <div class="panel">
+      <div class="row" style="justify-content: space-between">
+        <h2 style="margin:0">评分运行（不可变，钉住校准版本）</h2>
+        <div class="row">
+          <input id="runFilter" placeholder="按 dataset 过滤" style="width:200px" />
+          <button class="btn secondary" id="refreshRuns">刷新</button>
+        </div>
+      </div>
+      <table id="runsTable">
+        <thead><tr>
+          <th>运行 / 批次</th><th>数据集</th><th>版本</th><th>状态</th><th>总分</th>
+          <th>门禁</th><th>样本(评估/豁免)</th><th>时间</th><th>标记</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div id="runDetail"></div>
+  </section>
+
+  <!-- ============================= SUBMIT ============================ -->
+  <section id="tab-submit" hidden>
+    <div class="panel">
+      <h2>提交评分批次（空批次提交 samples=[] 可直接验证空批次行为）</h2>
+      <div class="grid2">
+        <div><label>数据集 dataset</label><input id="fDataset" value="orders_dq" style="width:100%" /></div>
+        <div><label>批次 batch_id</label><input id="fBatch" value="manual-1" style="width:100%" /></div>
+        <div><label>observed_at（ISO，留空取当前 UTC）</label><input id="fTime" placeholder="2026-11-20T10:00:00Z" style="width:100%" /></div>
+        <div><label>校准版本（留空 = 当前 active）</label><select id="fVersion" style="width:100%"></select></div>
+        <div><label>回补 / 重评</label>
+          <select id="fBackfill" style="width:100%"><option value="false">常规提交</option><option value="true">backfill=true</option></select>
+        </div>
+      </div>
+      <h3>samples JSON（空批次请填 []）</h3>
+      <textarea id="fSamples"></textarea>
+      <div class="row" style="margin-top:10px">
+        <button class="btn" id="submitBtn">提交评分</button>
+        <button class="btn secondary" id="fillEmptyBtn">填入空批次 []</button>
+        <button class="btn secondary" id="fillSampleBtn">填入示例样本</button>
+      </div>
+      <div id="submitResult" style="margin-top:14px"></div>
+    </div>
+  </section>
+
+  <!-- ============================ VERSIONS =========================== -->
+  <section id="tab-versions" hidden>
+    <div class="panel">
+      <h2>校准版本（draft → active → archived，配置不可变）</h2>
+      <table id="versionsTable">
+        <thead><tr><th>版本</th><th>状态</th><th>规则数</th><th>校验和 sha256</th><th>创建</th><th>激活时间</th><th>操作</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="panel">
+      <h2>版本对照</h2>
+      <div class="row">
+        <select id="diffFrom"></select><span class="muted">→</span><select id="diffTo"></select>
+        <button class="btn" id="diffBtn">对照</button>
+      </div>
+      <div id="diffOut" style="margin-top:12px"></div>
+    </div>
+    <div class="panel">
+      <h2>新建版本（粘贴 CalibrationConfig JSON）</h2>
+      <textarea id="newVersionJson" style="min-height:220px"></textarea>
+      <div class="row" style="margin-top:10px">
+        <input id="newVersionId" placeholder="version_id，如 v3.0" style="width:220px" />
+        <button class="btn" id="createVersionBtn">创建为 draft</button>
+        <button class="btn secondary" id="fillConfigBtn">填入当前 active 配置模板</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================== GATES ============================ -->
+  <section id="tab-gates" hidden>
+    <div class="panel">
+      <h2>发布门禁（按运行所钉版本的 gate_policy 判定，不随后续版本变化）</h2>
+      <table id="gatesTable">
+        <thead><tr><th>运行</th><th>数据集 / 批次</th><th>版本</th><th>状态</th><th>总分</th><th>门禁</th><th>阻断原因</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============================= ALERTS =========================== -->
+  <section id="tab-alerts" hidden>
+    <div class="panel">
+      <h2>告警（随运行生成，绑定版本）</h2>
+      <table id="alertsTable">
+        <thead><tr><th>级别</th><th>类型</th><th>规则</th><th>消息</th><th>数据集 / 批次</th><th>版本</th><th>运行</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const api = (p, opts) => fetch('/api' + p, opts).then(async r => {
+  const data = r.status === 204 ? null : await r.json().catch(() => null);
+  if (!r.ok) throw new Error((data && data.detail) || (r.status + ' ' + r.statusText));
+  return data;
+});
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const pct = x => x == null ? '—' : (x * 100).toFixed(2) + '%';
+const short = h => h ? h.slice(0, 12) + '…' : '';
+const stateLabel = { scored: '已评分', empty: '空批次', insufficient_samples: '样本不足', rule_conflict: '规则冲突' };
+
+function toast(msg, ok = true) {
+  const t = $('#toast'); t.textContent = msg; t.className = 'toast ' + (ok ? 'ok' : 'err');
+  t.style.display = 'block'; setTimeout(() => t.style.display = 'none', 4200);
+}
+
+// ---------------- tabs ----------------
+$$('nav button').forEach(b => b.onclick = () => {
+  $$('nav button').forEach(x => x.classList.remove('on')); b.classList.add('on');
+  $$('main section').forEach(s => s.hidden = true);
+  $('#tab-' + b.dataset.tab).hidden = false;
+  if (b.dataset.tab === 'versions') loadVersions();
+  if (b.dataset.tab === 'gates') loadGates();
+  if (b.dataset.tab === 'alerts') loadAlerts();
+  if (b.dataset.tab === 'submit') loadVersionSelect();
+});
+
+// ---------------- header ----------------
+async function loadActive() {
+  try {
+    const v = await api('/versions/active');
+    $('#activeBadge').textContent = 'active: ' + v.version_id;
+    $('#activeBadge').className = 'badge active';
+    $('#activeChecksum').textContent = 'checksum ' + v.config_checksum.slice(0, 16) + '…';
+  } catch {
+    $('#activeBadge').textContent = '未激活版本';
+    $('#activeBadge').className = 'badge draft';
+    $('#activeChecksum').textContent = '';
+  }
+}
+
+// ---------------- runs ----------------
+async function loadRuns() {
+  const ds = $('#runFilter').value.trim();
+  const runs = await api('/runs' + (ds ? '?dataset=' + encodeURIComponent(ds) : ''));
+  const tb = $('#runsTable tbody');
+  if (!runs.length) { tb.innerHTML = '<tr><td colspan="9" class="muted">暂无运行记录</td></tr>'; return; }
+  tb.innerHTML = runs.map(r => `
+    <tr class="clickable" data-run="${r.run_id}">
+      <td><div class="mono">${esc(r.run_id)}</div><div class="muted">${esc(r.batch_id)}</div></td>
+      <td>${esc(r.dataset)}</td>
+      <td><span class="pill">${esc(r.version_id)}</span></td>
+      <td><span class="badge state-${r.state}">${stateLabel[r.state] || r.state}</span></td>
+      <td>${r.overall_score == null
+        ? '<span class="score-none">不可精确评分</span>'
+        : '<span class="score-num">' + (r.overall_score * 100).toFixed(2) + '</span>'}</td>
+      <td><span class="badge ${r.gate_passed ? 'gate-true' : 'gate-false'}">${r.gate_passed ? '通过' : '阻断'}</span></td>
+      <td>${r.result.total_samples}（${r.result.evaluated_samples}/${r.result.exempted_samples}）</td>
+      <td class="muted">${esc(r.observed_at.replace('T', ' ').slice(0, 19))}</td>
+      <td>${[r.backfill ? '<span class="pill exempt">回补</span>' : '', r.rescore_of_run_id ? '<span class="pill">重评</span>' : '', r.reused_existing ? '<span class="pill">幂等复用</span>' : ''].join(' ')}</td>
+    </tr>`).join('');
+  $$('tr[data-run]', tb).forEach(tr => tr.onclick = () => showRun(tr.dataset.run));
+}
+$('#refreshRuns').onclick = loadRuns;
+$('#runFilter').onkeydown = e => { if (e.key === 'Enter') loadRuns(); };
+
+async function showRun(runId) {
+  const r = await api('/runs/' + runId);
+  const res = r.result;
+  const scoreBlock = r.overall_score == null
+    ? `<div class="reason"><b>不可精确评分（${esc(stateLabel[r.state] || r.state)}）</b>：${esc(res.state_reason)}<br/>
+       系统拒绝在该状态下输出精确分数，门禁自动阻断。</div>`
+    : `<div class="kv"><div class="k">总分（加权）</div><div class="score-num" style="font-size:18px">${(r.overall_score * 100).toFixed(2)}</div></div>`;
+  $('#runDetail').innerHTML = `
+  <div class="panel">
+    <button class="backlink">← 返回列表</button>
+    <h2 style="margin-top:10px">运行 ${esc(r.run_id)} <span class="badge state-${r.state}">${stateLabel[r.state] || r.state}</span>
+      <span class="badge ${r.gate_passed ? 'gate-true' : 'gate-false'}">门禁${r.gate_passed ? '通过' : '阻断'}</span></h2>
+    <div class="kv">
+      <div class="k">数据集 / 批次</div><div>${esc(r.dataset)} / ${esc(r.batch_id)}</div>
+      <div class="k">钉住版本</div><div><span class="pill">${esc(r.version_id)}</span>
+        ${r.backfill ? '<span class="pill exempt">回补提交</span>' : ''}
+        ${r.rescore_of_run_id ? '<span class="pill">重评自 ' + esc(r.rescore_of_run_id) + '</span>' : ''}</div>
+      <div class="k">配置校验和</div><div class="checksum">${esc(r.config_checksum)}</div>
+      <div class="k">样本 / 评估 / 豁免</div><div>${res.total_samples} / ${res.evaluated_samples} / ${res.exempted_samples}</div>
+      <div class="k">观察时间</div><div>${esc(r.observed_at)}</div>
+    </div>
+    <h3>评分构成（拆到规则）</h3>
+    ${scoreBlock}
+    <table style="margin-top:10px">
+      <thead><tr><th>规则</th><th>原始权重</th><th>归一化权重</th><th>评估/通过/失败/豁免</th>
+        <th>规则分</th><th>通过阈值</th><th>判定</th><th>不足?</th><th>冲突组?</th></tr></thead>
+      <tbody>${res.rules.map(x => `
+        <tr>
+          <td><b>${esc(x.rule_id)}</b><br/><span class="muted">${esc(x.name)}</span></td>
+          <td class="mono">${x.weight}</td>
+          <td class="mono">${pct(x.normalized_weight)}</td>
+          <td class="mono">${x.evaluated_samples}/${x.passed_samples}/${x.failed_samples}/${x.exempted_samples}</td>
+          <td>${x.rule_score == null ? '<span class="score-none">N/A</span>' : '<span class="score-num">' + pct(x.rule_score) + '</span>'}</td>
+          <td class="mono">${pct(x.pass_threshold)}</td>
+          <td>${x.passed_threshold == null ? '<span class="muted">无法判定</span>'
+             : (x.passed_threshold ? '<span class="pill pass">达标</span>' : '<span class="pill fail">未达标</span>')}</td>
+          <td>${x.insufficient ? '<span class="pill fail">是</span>' : '否'}</td>
+          <td>${x.in_conflict_group ? '<span class="pill">是</span>' : '否'}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+    ${res.conflicts.length ? `<h3>规则冲突分析</h3><table><thead><tr>
+        <th>冲突组</th><th>规则</th><th>共享样本</th><th>冲突样本</th><th>冲突率</th><th>容忍度</th><th>超限</th></tr></thead>
+      <tbody>${res.conflicts.map(c => `<tr>
+        <td class="mono">${esc(c.group_id)}</td><td>${c.rules.map(esc).join(' vs ')}</td>
+        <td>${c.shared_samples}</td><td>${c.conflicting_samples}</td>
+        <td class="mono ${c.exceeded ? 'diff-del' : ''}">${pct(c.conflict_rate)}</td>
+        <td class="mono">${pct(c.max_conflict_rate)}</td>
+        <td>${c.exceeded ? '<span class="pill fail">超限</span>' : '在容忍度内'}</td></tr>`).join('')}</tbody></table>` : ''}
+    <h3>发布门禁（版本 ${esc(r.version_id)} 策略）</h3>
+    <div class="kv">
+      <div class="k">最低总分</div><div class="mono">${pct(res.gate.min_overall_score)}</div>
+      <div class="k">规则失败阻断</div><div>${res.gate.block_on_rule_failure ? '是' : '否'}</div>
+      <div class="k">关键告警阻断</div><div>${res.gate.block_on_alert ? '是' : '否'}（${res.gate.alert_rule_ids.map(esc).join(', ') || '无'}）</div>
+      <div class="k">结论</div><div><span class="badge ${r.gate_passed ? 'gate-true' : 'gate-false'}">${r.gate_passed ? '放行' : '阻断'}</span></div>
+    </div>
+    ${res.gate.reasons.length ? `<div class="reason" style="margin-top:8px">${res.gate.reasons.map(esc).map(x => '• ' + x).join('<br/>')}</div>` : ''}
+    ${res.alerts.length ? `<h3>本运行告警</h3>${alertTable(res.alerts)}` : ''}
+    <h3>样本证据（${res.sample_results.length} 条规则级判定）</h3>
+    <table>
+      <thead><tr><th>样本</th><th>规则</th><th>判定</th><th>豁免</th><th>观察时间</th><th>evidence</th><th>metadata</th></tr></thead>
+      <tbody>${res.sample_results.map(s => `<tr>
+        <td class="mono">${esc(s.sample_id)}</td><td>${esc(s.rule_id)}</td>
+        <td>${s.exempt ? '<span class="pill exempt">豁免</span>'
+           : (s.passed ? '<span class="pill pass">通过</span>' : '<span class="pill fail">失败</span>')}</td>
+        <td>${s.exemption ? esc(s.exemption.window_id) + (s.exemption.reason ? '：' + esc(s.exemption.reason) : '') : '—'}</td>
+        <td class="muted mono">${esc(String(s.observed_at).replace('T',' ').slice(0,19))}</td>
+        <td><pre class="ev">${esc(JSON.stringify(s.evidence))}</pre></td>
+        <td><pre class="ev">${esc(JSON.stringify(s.metadata))}</pre></td></tr>`).join('')}
+      </tbody>
+    </table>
+  </div>`;
+  $('.backlink', $('#runDetail')).onclick = () => { $('#runDetail').innerHTML = ''; };
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function alertTable(alerts) {
+  return `<table><thead><tr><th>级别</th><th>类型</th><th>规则</th><th>消息</th></tr></thead>
+    <tbody>${alerts.map(a => `<tr><td><span class="badge sev-${a.severity}">${a.severity}</span></td>
+      <td class="mono">${esc(a.alert_type)}</td><td>${esc(a.rule_id || '—')}</td><td>${esc(a.message)}</td></tr>`).join('')}
+    </tbody></table>`;
+}
+
+// ---------------- versions ----------------
+async function loadVersions() {
+  const vs = await api('/versions');
+  $('#versionsTable tbody').innerHTML = vs.length ? vs.map(v => `
+    <tr>
+      <td><b>${esc(v.version_id)}</b><br/><span class="muted">${esc(v.notes || '')}</span></td>
+      <td><span class="badge ${v.status}">${v.status}</span></td>
+      <td>${v.config.rules.length}</td>
+      <td class="checksum">${esc(v.config_checksum)}</td>
+      <td class="muted">${esc(v.created_at.replace('T',' ').slice(0,19))}<br/>by ${esc(v.created_by)}</td>
+      <td class="muted">${v.activated_at ? esc(v.activated_at.replace('T',' ').slice(0,19)) : '—'}</td>
+      <td>${v.status === 'draft' ? `<button class="btn" data-activate="${esc(v.version_id)}">激活</button>` : ''}
+          <button class="btn secondary" data-view="${esc(v.version_id)}">查看配置</button></td>
+    </tr>`).join('') : '<tr><td colspan="7" class="muted">暂无版本</td></tr>';
+  $$('button[data-activate]').forEach(b => b.onclick = async () => {
+    try { await api('/versions/' + b.dataset.activate + '/activate', { method: 'POST' });
+      toast('版本 ' + b.dataset.activate + ' 已激活'); await Promise.all([loadVersions(), loadActive()]);
+    } catch (e) { toast(e.message, false); }
+  });
+  $$('button[data-view]').forEach(b => b.onclick = async () => {
+    const v = await api('/versions/' + b.dataset.view);
+    $('#newVersionJson').value = JSON.stringify(v.config, null, 2);
+    $('#newVersionId').value = v.version_id + '-copy';
+    toast('已载入 ' + v.version_id + ' 配置到编辑器（修改 version_id 后可另存新版本）');
+  });
+  $('#diffFrom').innerHTML = vs.map(v => `<option>${esc(v.version_id)}</option>`).join('');
+  $('#diffTo').innerHTML = vs.map(v => `<option>${esc(v.version_id)}</option>`).join('');
+  if (vs.length >= 2) { $('#diffFrom').selectedIndex = 1; $('#diffTo').selectedIndex = 0; }
+  loadVersionSelect(vs);
+}
+
+$('#diffBtn').onclick = async () => {
+  try {
+    const d = await api(`/versions/${encodeURIComponent($('#diffFrom').value)}/diff/${encodeURIComponent($('#diffTo').value)}`);
+    const rows = (label, map, fmt = x => x) => Object.entries(map).map(([k, v]) => {
+      const changed = JSON.stringify(v.from) !== JSON.stringify(v.to);
+      return `<tr class="${changed ? 'diff-chg' : ''}"><td>${esc(label)}: ${esc(k)}</td>
+        <td class="mono">${v.from == null ? '<span class="diff-add">新增</span>' : esc(fmt(v.from))}</td>
+        <td class="mono">${v.to == null ? '<span class="diff-del">删除</span>' : esc(fmt(v.to))}</td></tr>`;
+    }).join('');
+    $('#diffOut').innerHTML = `
+      <table><thead><tr><th>项</th><th>${esc(d.from_version)}</th><th>${esc(d.to_version)}</th></tr></thead>
+      <tbody>
+        <tr><td>min_batch_samples</td><td class="mono">${d.min_batch_samples.from}</td><td class="mono">${d.min_batch_samples.to}</td></tr>
+        ${rows('权重 weight', d.weights)}
+        ${rows('通过阈值', d.thresholds, x => (x * 100).toFixed(0) + '%')}
+        ${rows('最小样本', d.min_samples)}
+        <tr><td>豁免窗口</td><td class="mono">${d.exemption_windows.from.join(', ') || '—'}</td><td class="mono">${d.exemption_windows.to.join(', ') || '—'}</td></tr>
+        <tr><td>冲突组</td><td class="mono">${JSON.stringify(d.conflict_groups.from)}</td><td class="mono">${JSON.stringify(d.conflict_groups.to)}</td></tr>
+        <tr><td>门禁策略</td><td class="mono"><pre class="ev">${esc(JSON.stringify(d.gate_policy.from, null, 1))}</pre></td>
+            <td class="mono"><pre class="ev">${esc(JSON.stringify(d.gate_policy.to, null, 1))}</pre></td></tr>
+        <tr><td>新增规则</td><td colspan="2" class="diff-add">${d.added_rules.map(esc).join(', ') || '—'}</td></tr>
+        <tr><td>移除规则</td><td colspan="2" class="diff-del">${d.removed_rules.map(esc).join(', ') || '—'}</td></tr>
+      </tbody></table>`;
+  } catch (e) { toast(e.message, false); }
+};
+
+$('#createVersionBtn').onclick = async () => {
+  const id = $('#newVersionId').value.trim();
+  if (!id) return toast('请填写 version_id', false);
+  let config;
+  try { config = JSON.parse($('#newVersionJson').value); }
+  catch (e) { return toast('配置 JSON 解析失败: ' + e.message, false); }
+  try {
+    await api('/versions', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ version_id: id, config, created_by: 'web-ui' }) });
+    toast('版本 ' + id + ' 已创建为 draft'); await loadVersions();
+  } catch (e) { toast(e.message, false); }
+};
+$('#fillConfigBtn').onclick = async () => {
+  try { const v = await api('/versions/active');
+    $('#newVersionJson').value = JSON.stringify(v.config, null, 2);
+  } catch { toast('没有 active 版本，请先载入演示数据', false); }
+};
+
+// ---------------- submit ----------------
+async function loadVersionSelect(preloaded) {
+  const vs = preloaded || await api('/versions');
+  $('#fVersion').innerHTML = '<option value="">（当前 active）</option>' +
+    vs.map(v => `<option value="${esc(v.version_id)}">${esc(v.version_id)} (${v.status})</option>`).join('');
+}
+const SAMPLE_SAMPLES = [
+  { sample_id: 'manual-s1', observed_at: '2026-11-20T10:00:00Z', metadata: { src: 'manual' },
+    observations: [
+      { rule_id: 'null_check', passed: true, evidence: { nulls: 0 } },
+      { rule_id: 'uniqueness', passed: true, evidence: { dupes: 0 } },
+      { rule_id: 'completeness', passed: true, evidence: { filled: 12 } } ] },
+  { sample_id: 'manual-s2', observed_at: '2026-11-20T10:05:00Z', metadata: { src: 'manual' },
+    observations: [
+      { rule_id: 'null_check', passed: false, evidence: { nulls: 3 } },
+      { rule_id: 'uniqueness', passed: true, evidence: { dupes: 0 } },
+      { rule_id: 'completeness', passed: true, evidence: { filled: 11 } } ] }
+];
+$('#fillEmptyBtn').onclick = () => $('#fSamples').value = '[]';
+$('#fillSampleBtn').onclick = () => $('#fSamples').value = JSON.stringify(SAMPLE_SAMPLES, null, 2);
+$('#submitBtn').onclick = async () => {
+  let samples;
+  try { samples = JSON.parse($('#fSamples').value || '[]'); }
+  catch (e) { return toast('samples JSON 解析失败: ' + e.message, false); }
+  const body = {
+    dataset: $('#fDataset').value.trim(), batch_id: $('#fBatch').value.trim(),
+    observed_at: $('#fTime').value.trim() || new Date().toISOString(),
+    samples, backfill: $('#fBackfill').value === 'true'
+  };
+  const q = $('#fVersion').value ? '?version_id=' + encodeURIComponent($('#fVersion').value) : '';
+  try {
+    const r = await api('/runs' + q, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    $('#submitResult').innerHTML = `<div class="panel" style="margin-bottom:0">
+      <h3>提交结果 ${r.reused_existing ? '<span class="pill exempt">幂等复用既有运行</span>' : '<span class="pill pass">新运行</span>'}</h3>
+      <div class="kv">
+        <div class="k">run_id</div><div class="mono">${esc(r.run_id)}</div>
+        <div class="k">状态</div><div><span class="badge state-${r.state}">${stateLabel[r.state] || r.state}</span></div>
+        <div class="k">总分</div><div>${r.overall_score == null ? '<span class="score-none">不可精确评分：' + esc(r.result.state_reason) + '</span>' : '<span class="score-num">' + (r.overall_score * 100).toFixed(2) + '</span>'}</div>
+        <div class="k">门禁</div><div><span class="badge ${r.gate_passed ? 'gate-true' : 'gate-false'}">${r.gate_passed ? '通过' : '阻断'}</span></div>
+        <div class="k">版本 / 校验和</div><div class="checksum">${esc(r.version_id)} · ${esc(r.config_checksum)}</div>
+      </div>
+      ${r.result.gate.reasons.length ? '<div class="reason" style="margin-top:8px">' + r.result.gate.reasons.map(esc).map(x => '• ' + x).join('<br/>') + '</div>' : ''}
+      <div style="margin-top:10px"><button class="btn secondary" id="goRunBtn">在运行记录中查看</button></div></div>`;
+    $('#goRunBtn').onclick = async () => { $$('nav button')[0].click(); await loadRuns(); showRun(r.run_id); };
+    toast(r.reused_existing ? '命中幂等约束，返回既有不可变运行' : '评分完成');
+  } catch (e) { toast(e.message, false); }
+};
+
+// ---------------- gates ----------------
+async function loadGates() {
+  const runs = await api('/runs?limit=500');
+  $('#gatesTable tbody').innerHTML = runs.length ? runs.map(r => `
+    <tr class="clickable" data-run="${r.run_id}">
+      <td class="mono">${esc(r.run_id)}</td><td>${esc(r.dataset)} / ${esc(r.batch_id)}</td>
+      <td><span class="pill">${esc(r.version_id)}</span></td>
+      <td><span class="badge state-${r.state}">${stateLabel[r.state] || r.state}</span></td>
+      <td>${r.overall_score == null ? '<span class="score-none">N/A</span>' : '<span class="score-num">' + (r.overall_score * 100).toFixed(2) + '</span>'}</td>
+      <td><span class="badge ${r.gate_passed ? 'gate-true' : 'gate-false'}">${r.gate_passed ? '放行' : '阻断'}</span></td>
+      <td class="muted">${r.result.gate.reasons.map(esc).join('<br/>') || '—'}</td>
+    </tr>`).join('') : '<tr><td colspan="7" class="muted">暂无运行</td></tr>';
+  $$('#gatesTable tr[data-run]').forEach(tr => tr.onclick = () => {
+    $$('nav button')[0].click(); showRun(tr.dataset.run);
+  });
+}
+
+// ---------------- alerts ----------------
+async function loadAlerts() {
+  const alerts = await api('/alerts?limit=500');
+  $('#alertsTable tbody').innerHTML = alerts.length ? alerts.map(a => `
+    <tr>
+      <td><span class="badge sev-${a.severity}">${a.severity}</span></td>
+      <td class="mono">${esc(a.alert_type)}</td><td>${esc(a.rule_id || '—')}</td>
+      <td>${esc(a.message)}</td><td>${esc(a.dataset)} / ${esc(a.batch_id)}</td>
+      <td><span class="pill">${esc(a.version_id)}</span></td>
+      <td class="mono" style="cursor:pointer;color:var(--brand)" data-run="${esc(a.run_id)}">${esc(a.run_id)}</td>
+    </tr>`).join('') : '<tr><td colspan="7" class="muted">暂无告警</td></tr>';
+  $$('#alertsTable [data-run]').forEach(td => td.onclick = () => {
+    $$('nav button')[0].click(); showRun(td.dataset.run);
+  });
+}
+
+// ---------------- seed ----------------
+$('#seedBtn').onclick = async () => {
+  try { const out = await api('/demo/seed', { method: 'POST' });
+    toast('演示数据就绪：版本 ' + out.versions_seeded.join(', '));
+    await Promise.all([loadActive(), loadRuns()]);
+  } catch (e) { toast(e.message, false); }
+};
+
+loadActive(); loadRuns();
+</script>
+</body>
+</html>
